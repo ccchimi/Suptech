@@ -1,0 +1,17 @@
+target/
+build/
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+.idea/
+*.iws
+*.iml
+*.ipr
+.vscode/
+.settings/
+.project
+.classpath
+
+*.log
+.DS_Store
+.env

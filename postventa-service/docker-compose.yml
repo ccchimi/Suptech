@@ -1,0 +1,30 @@
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: postventa-postgres
+    environment:
+      POSTGRES_DB: postventa
+      POSTGRES_USER: postventa
+      POSTGRES_PASSWORD: postventa
+    ports:
+      - "${DB_PORT:-5433}:5432"
+    volumes:
+      - postventa-datos:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postventa -d postventa"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    container_name: postventa-jaeger
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"
+      - "4318:4318"
+
+volumes:
+  postventa-datos:
