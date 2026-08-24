@@ -30,6 +30,20 @@ diseño y cómo ejecutarlo— está en
 cd postventa-service && docker compose up -d && ./mvnw spring-boot:run -Dspring-boot.run.profiles=local
 ```
 
+En PowerShell el wrapper es `.\mvnw.cmd` y los argumentos `-D` **deben ir entrecomillados**,
+o PowerShell parte el argumento en el primer punto y Maven falla con
+`Unknown lifecycle phase ".run.profiles=local"`:
+
+```bash
+cd postventa-service
+```
+```bash
+docker compose up -d
+```
+```bash
+.\mvnw.cmd spring-boot:run "-Dspring-boot.run.profiles=local"
+```
+
 O todo en contenedores, sin necesidad de JDK local:
 
 ```bash
