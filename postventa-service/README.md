@@ -1,5 +1,7 @@
 # API de Soporte y Postventa Suptech (`postventa-service`)
 
+[![CI](https://github.com/ccchimi/Suptech/actions/workflows/ci.yml/badge.svg)](https://github.com/ccchimi/Suptech/actions/workflows/ci.yml)
+
 Microservicio de atención al cliente: **reembolsos, reclamos, devoluciones de productos
 defectuosos y cancelaciones de pedidos**.
 
@@ -9,8 +11,10 @@ defectuosos y cancelaciones de pedidos**.
 | Spring Boot | 3.5.16 |
 | Persistencia | Spring Data JPA (Hibernate 6) + PostgreSQL + Flyway |
 | Integración | `RestClient` (síncrono, sobre el `HttpClient` del JDK) |
-| Resiliencia | Resilience4j (retry + circuit breaker) + saga persistida |
+| Resiliencia | Resilience4j (retry + circuit breaker) + saga persistida + ShedLock |
+| Seguridad | Spring Security (HTTP Basic, roles, errores en ProblemDetail) |
 | Observabilidad | Actuator + Spring Boot Admin Client + Micrometer Tracing (OTLP) + Prometheus |
+| Calidad | 34 tests (unitarios, MockMvc, MockRestServiceServer, Testcontainers) + CI en GitHub Actions |
 
 ---
 
@@ -39,7 +43,7 @@ com.suptech.postventa
     ├── adapter/in/rest/             controladores + DTOs + ProblemDetail (RFC 9457)
     ├── adapter/out/persistence/     entidades JPA, repositorios Spring Data, mappers
     ├── adapter/out/client/          RestClient hacia Pedidos e Inventario + Resilience4j
-    └── config/                      RestClientConfig, IntegracionProperties, AplicacionConfig
+    └── config/                      seguridad, clientes HTTP, planificador y observabilidad
 ```
 
 Consecuencia práctica: `CancelacionSagaServiceTest` prueba **toda** la lógica de la
@@ -102,6 +106,18 @@ porque liberar stock es **idempotente y reintentable**:
 La compensación clásica solo aplica a fallos **anteriores** al paso 1: ahí no hay ningún
 efecto externo que deshacer y la saga muere limpia (`FALLIDA`).
 
+### Varias réplicas del servicio
+
+El reconciliador se dispara en todos los nodos a la vez, así que va envuelto en **ShedLock**
+(`@SchedulerLock` sobre el método, tabla `shedlock`, proveedor JDBC): solo un nodo procesa
+cada lote. El bloqueo optimista de la fila de saga evitaría la corrupción de datos, pero no
+el trabajo duplicado ni las llamadas repetidas a Inventario.
+
+El proveedor se configura con `usingDbTime()`: el bloqueo se mide con el reloj de PostgreSQL
+y no con el de cada proceso, para que un desfase de hora entre nodos no libere un bloqueo
+antes de tiempo. `lockAtMostFor` (5 min) libera el bloqueo si un nodo muere a mitad del lote;
+`lockAtLeastFor` (5 s) evita que dos nodos con relojes dispares lo tomen casi a la vez.
+
 ### Idempotencia (en las tres capas)
 
 | Capa | Mecanismo |
@@ -150,6 +166,7 @@ Dos advertencias que el código ya contempla:
 ```bash
 # Abrir un reembolso
 curl -X POST http://localhost:8081/api/v1/casos \
+  -u agente:postventa-dev \
   -H 'Content-Type: application/json' \
   -d '{"pedidoId":"PED-1001","clienteId":"CLI-77","tipo":"REEMBOLSO",
        "motivo":"Producto defectuoso","montoSolicitado":149.90,
@@ -159,6 +176,7 @@ curl -X POST http://localhost:8081/api/v1/casos \
 ```bash
 # Cancelar un pedido (dispara la saga)
 curl -X POST http://localhost:8081/api/v1/cancelaciones \
+  -u agente:postventa-dev \
   -H 'Content-Type: application/json' \
   -H 'Idempotency-Key: 6f1c9a20-8f2a-4a1e-9a55-9f0c6f2b1d31' \
   -d '{"pedidoId":"PED-1001","clienteId":"CLI-77","motivo":"El cliente se arrepintió"}'
@@ -166,7 +184,7 @@ curl -X POST http://localhost:8081/api/v1/cancelaciones \
 
 ```bash
 # Consultar el desenlace de un caso
-curl http://localhost:8081/api/v1/casos/{casoId}
+curl -u agente:postventa-dev http://localhost:8081/api/v1/casos/{casoId}
 ```
 
 | Método | Ruta | Descripción |
@@ -177,6 +195,8 @@ curl http://localhost:8081/api/v1/casos/{casoId}
 | `POST` | `/api/v1/cancelaciones` | Cancela un pedido → `200` / `202` / `409` |
 | `GET` | `/` | Redirige a Swagger UI |
 
+Salvo la raíz y la documentación, todos los endpoints exigen autenticación (sección 5).
+
 `200` = saga completa · `202` = pedido cancelado, algún paso en reintento (seguir en
 `seguimiento`) · `409` = rechazada, **sin ningún cambio aplicado**.
 
@@ -185,7 +205,58 @@ Errores en formato **ProblemDetail (RFC 9457)**. Documentación viva en
 
 ---
 
-## 5. Ejecución local
+## 5. Seguridad
+
+Spring Security con **HTTP Basic** y dos roles. La API es *stateless*: sin sesión, sin CSRF
+—no hay formularios ni cookies que proteger— y con las credenciales en cada petición.
+
+| Ruta | Quién puede |
+|---|---|
+| `/`, `/swagger-ui/**`, `/v3/api-docs/**` | Público |
+| `/actuator/health`, `/actuator/info` | Público (sondas de Kubernetes) |
+| Resto de `/actuator/**` | `ROLE_ADMIN` |
+| `POST /api/v1/cancelaciones` | `ROLE_AGENTE` o `ROLE_ADMIN` |
+| Resto de `/api/v1/**` | Autenticado |
+| Cualquier otra ruta | Denegado |
+
+Los errores de seguridad también son **ProblemDetail**: `401` con título `NO_AUTENTICADO` y
+`403` con `ACCESO_DENEGADO`, en el mismo formato que el resto de la API en lugar del cuerpo
+vacío que devuelve Spring por defecto.
+
+### Credenciales
+
+Usuarios en memoria definidos por configuración, con la clave cifrada con BCrypt al arrancar:
+
+| Usuario | Rol | Variables de entorno |
+|---|---|---|
+| `agente` / `postventa-dev` | `AGENTE` | `API_USER`, `API_PASSWORD` |
+| `admin` / `admin-dev` | `ADMIN` + `AGENTE` | `ADMIN_USER`, `ADMIN_PASSWORD` |
+
+Esos valores por defecto son **solo para desarrollo local**; en cualquier entorno real se
+inyectan por variable de entorno. No hay secretos en el repositorio.
+
+```bash
+curl -u agente:postventa-dev "http://localhost:8081/api/v1/casos?clienteId=CLI-77"
+```
+
+En Swagger UI el botón **Authorize** pide usuario y contraseña: el esquema `basicAuth` está
+declarado en la especificación OpenAPI.
+
+Como `/actuator/**` pasa a exigir `ROLE_ADMIN`, el cliente de Spring Boot Admin envía sus
+credenciales en los metadatos de registro (`user.name` / `user.password` en el
+`application.yml`), o el servidor no podría leer las métricas.
+
+### Cómo migrar a OAuth2
+
+`SeguridadConfig` es el único punto a tocar: se cambia `httpBasic(...)` por
+`oauth2ResourceServer(oauth -> oauth.jwt(Customizer.withDefaults()))`, se añade
+`spring-boot-starter-oauth2-resource-server` y se configura
+`spring.security.oauth2.resourceserver.jwt.issuer-uri`. Las reglas de rutas, los roles y los
+controladores no cambian.
+
+---
+
+## 6. Ejecución local
 
 Requisitos: **JDK 21+** y Docker. Maven **no** hace falta instalarlo: el proyecto incluye
 el *Maven Wrapper* (`mvnw` / `mvnw.cmd`), que descarga la versión correcta la primera vez.
@@ -240,20 +311,62 @@ este servicio sin el perfil `local`.
 > se edita — se añade otra. En desarrollo, si hace falta partir de cero:
 > `docker compose down -v && docker compose up -d`.
 
+### Ejecutar el servicio también en contenedor
+
+El `docker-compose.yml` define el servicio bajo el perfil `app`, para que el flujo normal de
+desarrollo —infraestructura en Docker y servicio en el IDE— siga siendo el de arriba:
+
+```bash
+docker compose --profile app up -d --build
+```
+
+Usa el `Dockerfile` multi-etapa: compila con JDK 21 y ejecuta sobre un JRE Alpine con un
+usuario sin privilegios y `MaxRAMPercentage` para respetar el límite de memoria del
+contenedor. Espera a que PostgreSQL esté sano antes de arrancar. La alternativa sin
+Dockerfile, con los buildpacks de Spring Boot:
+
+```bash
+./mvnw spring-boot:build-image
+```
+
 ### Tests
 
 ```bash
 mvn test
 ```
 
-`CancelacionSagaServiceTest` cubre camino feliz, Inventario caído, recuperación posterior,
-agotamiento de reintentos, rechazo permanente e idempotencia — todo con dobles de los
-puertos. `ContextoAplicacionTest` levanta el contexto completo contra un PostgreSQL real
-con Testcontainers y **se salta automáticamente si no hay Docker**.
+**34 tests**, repartidos por nivel:
+
+| Suite | Qué prueba |
+|---|---|
+| `CancelacionSagaServiceTest` (10) | La saga con dobles de los puertos: camino feliz, Inventario caído, recuperación posterior, agotamiento de reintentos, rechazo permanente e idempotencia. Sin Spring, sin BD y sin red |
+| `CasoControllerTest` (5) | Capa web con `MockMvc`: códigos de estado, cabecera `Location`, validación campo a campo, ProblemDetail y el `401` sin credenciales |
+| `CancelacionControllerTest` (7) | La traducción de estado de saga a HTTP (`200`/`202`/`409`), los errores de negocio, el `403` por rol insuficiente y la propagación de `Idempotency-Key` |
+| `PedidosRestClientAdapterTest` (7) | El adaptador HTTP contra `MockRestServiceServer`: mapeo de `200`/`404`/`409`/`4xx`/`5xx` a `ResultadoIntegracion`, y las cabeceras y el cuerpo que se envían |
+| `InventarioRestClientAdapterTest` (4) | Lo mismo para Inventario, incluido que el `409` se trate como éxito idempotente |
+| `ContextoAplicacionTest` (1) | Levanta el contexto completo contra un PostgreSQL real con Testcontainers y ejecuta Flyway. **Se salta solo si no hay Docker** |
+
+Los tests de adaptadores no necesitan contexto de Spring: se enlaza un `MockRestServiceServer`
+al builder del `RestClient` y se instancia el adaptador a mano.
 
 ---
 
-## 6. Decisión: `RestClient` síncrono vs. arquitectura orientada a eventos
+## 7. Integración continua
+
+`.github/workflows/ci.yml` se ejecuta en cada push y cada pull request contra `main`:
+
+| Job | Qué hace |
+|---|---|
+| `build` | JDK 21 (Temurin) con caché de Maven y `./mvnw verify`: compila y corre la suite completa, incluidos los tests de Testcontainers, porque el runner de GitHub trae Docker. Publica los informes de Surefire como artefacto |
+| `imagen` | Construye la imagen con Buildx y caché de capas. No publica nada: valida que el `Dockerfile` sigue funcionando |
+
+Los jobs son secuenciales (`needs: build`): si los tests fallan no se gasta tiempo
+construyendo la imagen. El bloque `concurrency` cancela ejecuciones anteriores de la misma
+rama cuando llega un push nuevo.
+
+---
+
+## 8. Decisión: `RestClient` síncrono vs. arquitectura orientada a eventos
 
 Recomendación: **híbrido, y este código ya está preparado para adoptarlo sin tocar el
 dominio.**
@@ -291,7 +404,7 @@ adaptador, no rediseñar el servicio.
 
 ---
 
-## 7. Decisiones no obvias del código
+## 9. Decisiones no obvias del código
 
 El código no lleva comentarios: estas son las trampas que justifican por qué está escrito así.
 
@@ -330,13 +443,14 @@ adaptador lo trata como éxito idempotente.
 
 ---
 
-## 8. Pendientes conocidos antes de producción
+## 10. Pendientes conocidos antes de producción
 
-- **ShedLock** en `SagaReconciliadorService`: con varias réplicas, todas procesarían el
-  mismo lote (el bloqueo optimista evita la corrupción, no el trabajo duplicado).
-- **Seguridad**: los endpoints están abiertos; falta Spring Security (OAuth2 Resource
-  Server) y proteger `/actuator`.
+- **Autenticación**: hoy es HTTP Basic con usuarios en memoria (ver sección 9). En una
+  plataforma real se sustituye por OAuth2 Resource Server sin tocar los controladores.
 - **Alertas**: la métrica `postventa.saga.finalizadas{estado=REQUIERE_INTERVENCION}` debe
   tener alerta; es la señal de que hay stock retenido esperando a un humano.
+- **Stubs de Pedidos e Inventario**: mientras esos servicios no existan, el camino feliz de
+  la saga solo se demuestra en los tests. Un WireMock en el `docker-compose` lo haría
+  ejecutable de punta a punta.
 - **Contratos**: tests de contrato (Spring Cloud Contract / Pact) contra Pedidos e
   Inventario. Hoy los DTOs de sus APIs son una suposición documentada.

@@ -1,5 +1,7 @@
 # Suptech
 
+[![CI](https://github.com/ccchimi/Suptech/actions/workflows/ci.yml/badge.svg)](https://github.com/ccchimi/Suptech/actions/workflows/ci.yml)
+
 Plataforma de comercio electrónico construida como microservicios independientes.
 
 ## Servicios
@@ -17,12 +19,27 @@ hexagonal y virtual threads. Su pieza central es una **saga orquestada** que can
 pedido coordinando los servicios de Pedidos e Inventario, con recuperación automática
 cuando alguno de ellos no responde.
 
-La documentación completa —arquitectura, estrategia de fallos, decisiones de diseño y cómo
-ejecutarlo— está en [postventa-service/README.md](postventa-service/README.md).
+Incluye seguridad con Spring Security, bloqueo distribuido del planificador con ShedLock,
+imagen Docker multi-etapa y 34 tests ejecutados en CI.
+
+La documentación completa —arquitectura, estrategia de fallos, seguridad, decisiones de
+diseño y cómo ejecutarlo— está en
+[postventa-service/README.md](postventa-service/README.md).
 
 ```bash
 cd postventa-service && docker compose up -d && ./mvnw spring-boot:run -Dspring-boot.run.profiles=local
 ```
 
-Requisitos: JDK 21 o superior y Docker. Maven no hace falta instalarlo (el proyecto incluye
-el wrapper).
+O todo en contenedores, sin necesidad de JDK local:
+
+```bash
+cd postventa-service && docker compose --profile app up -d --build
+```
+
+Requisitos: Docker y, para el primer modo, JDK 21 o superior. Maven no hace falta
+instalarlo, el proyecto incluye el wrapper.
+
+## Integración continua
+
+`.github/workflows/ci.yml` compila, ejecuta la suite completa (incluidos los tests con
+Testcontainers) y construye la imagen Docker en cada push y pull request a `main`.

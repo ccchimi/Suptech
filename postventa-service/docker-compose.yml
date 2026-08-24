@@ -26,5 +26,28 @@ services:
       - "16686:16686"
       - "4318:4318"
 
+  postventa:
+    profiles: ["app"]
+    build: .
+    container_name: postventa-service
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      OTLP_ENDPOINT: http://jaeger:4318/v1/traces
+      ADMIN_CLIENT_ENABLED: "false"
+      PEDIDOS_URL: http://pedidos:8082
+      INVENTARIO_URL: http://inventario:8083
+    ports:
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8081/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
 volumes:
   postventa-datos:

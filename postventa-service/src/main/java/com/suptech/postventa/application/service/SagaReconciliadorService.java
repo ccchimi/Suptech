@@ -5,6 +5,7 @@ import com.suptech.postventa.domain.model.saga.SagaCancelacion;
 import com.suptech.postventa.domain.port.out.CasoRepositoryPort;
 import com.suptech.postventa.domain.port.out.SagaRepositoryPort;
 import io.micrometer.core.instrument.MeterRegistry;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -34,6 +35,7 @@ public class SagaReconciliadorService {
     @Scheduled(
             fixedDelayString = "${postventa.saga.reconciliacion.intervalo:PT15S}",
             initialDelayString = "${postventa.saga.reconciliacion.retardo-inicial:PT30S}")
+    @SchedulerLock(name = "reintentarSagasPendientes", lockAtMostFor = "PT5M", lockAtLeastFor = "PT5S")
     public void reintentarSagasPendientes() {
         List<SagaCancelacion> vencidas =
                 sagaRepository.buscarReintentosVencidos(clock.instant(), tamanoLote);

@@ -47,6 +47,8 @@ spring:
           metadata:
             equipo: postventa
             criticidad: alta
+            user.name: ${ADMIN_USER:admin}
+            user.password: ${ADMIN_PASSWORD:admin-dev}
         username: ${ADMIN_CLIENT_USER:}
         password: ${ADMIN_CLIENT_PASSWORD:}
         period: 10s
@@ -94,6 +96,14 @@ info:
     descripcion: Reembolsos, reclamos, devoluciones y cancelaciones de pedidos
 
 postventa:
+  seguridad:
+    agente:
+      usuario: ${API_USER:agente}
+      clave: ${API_PASSWORD:postventa-dev}
+    admin:
+      usuario: ${ADMIN_USER:admin}
+      clave: ${ADMIN_PASSWORD:admin-dev}
+
   integracion:
     pedidos:
       base-url: ${PEDIDOS_URL:http://localhost:8082}
