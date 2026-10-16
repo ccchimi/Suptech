@@ -25,6 +25,17 @@
         <spring-boot-admin.version>3.5.4</spring-boot-admin.version>
         <resilience4j.version>2.2.0</resilience4j.version>
         <shedlock.version>5.16.0</shedlock.version>
+        <!--
+          Parches de seguridad por encima del BOM de Spring Boot 3.5.16, detectados por Trivy.
+          3.5.16 es la ultima version OSS de la linea 3.5: lo que no se corrige aqui queda
+          documentado en .trivyignore y dependency-check-suppressions.xml hasta migrar a Boot 4.
+            tomcat:     CVE-2026-65182, CVE-2026-65905, CVE-2026-68525 (criticas)
+            jackson:    CVE-2026-89407, CVE-2026-89425, CVE-2026-68497, CVE-2026-91776, CVE-2026-91777
+            postgresql: CVE-2026-54291
+        -->
+        <tomcat.version>10.1.61</tomcat.version>
+        <jackson-bom.version>2.21.7</jackson-bom.version>
+        <postgresql.version>42.7.14</postgresql.version>
     </properties>
 
     <dependencies>
@@ -189,4 +200,50 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!--
+          Analisis de dependencias contra el NVD (OWASP Dependency-Check).
+          Uso:  NVD_API_KEY=... ./mvnw -Pseguridad verify -DskipTests
+          Rompe el build ante una vulnerabilidad con CVSS >= 7. Las excepciones viven en
+          dependency-check-suppressions.xml, cada una con su motivo y su fecha de revision.
+        -->
+        <profile>
+            <id>seguridad</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.owasp</groupId>
+                        <artifactId>dependency-check-maven</artifactId>
+                        <version>13.0.0</version>
+                        <configuration>
+                            <nvdApiKeyEnvironmentVariable>NVD_API_KEY</nvdApiKeyEnvironmentVariable>
+                            <failBuildOnCVSS>7</failBuildOnCVSS>
+                            <formats>
+                                <format>HTML</format>
+                                <format>SARIF</format>
+                            </formats>
+                            <suppressionFiles>
+                                <suppressionFile>${project.basedir}/dependency-check-suppressions.xml</suppressionFile>
+                            </suppressionFiles>
+                            <skipTestScope>true</skipTestScope>
+                            <ossindexAnalyzerEnabled>false</ossindexAnalyzerEnabled>
+                            <retireJsAnalyzerEnabled>false</retireJsAnalyzerEnabled>
+                            <nodeAnalyzerEnabled>false</nodeAnalyzerEnabled>
+                            <nodeAuditAnalyzerEnabled>false</nodeAuditAnalyzerEnabled>
+                            <assemblyAnalyzerEnabled>false</assemblyAnalyzerEnabled>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <goals>
+                                    <goal>check</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+
 </project>
