@@ -1,0 +1,18 @@
+# Vulnerabilidades revisadas y aceptadas en el escaneo de Trivy. Cada una lleva el motivo y un
+# vencimiento: al pasar la fecha la excepcion caduca y el CI vuelve a fallar hasta revisarla.
+
+vulnerabilities:
+  - id: CVE-2026-47884
+    purls: ["pkg:maven/org.springframework/spring-webmvc@6.2.19"]
+    statement: >-
+      RCE via XsltView. Spring Framework 6.2 no tiene version OSS corregida y Spring Boot 3.5.16
+      es la ultima de su linea; el arreglo de fondo es migrar a Spring Boot 4. No alcanzable: el
+      servicio es una API REST JSON sin XsltView ni vistas (revisado el 2026-10-16).
+    expired_at: 2027-01-31
+
+  - id: CVE-2026-47890
+    purls: ["pkg:maven/org.springframework/spring-webmvc@6.2.19"]
+    statement: >-
+      Corrupcion de Server-Sent Events con fragmentos de vista. Mismo motivo que CVE-2026-47884:
+      sin version OSS corregida en 6.2. No alcanzable: el servicio no usa SSE ni vistas.
+    expired_at: 2027-01-31
