@@ -11,7 +11,11 @@ RUN ./mvnw -B -ntp clean package -DskipTests
 
 FROM eclipse-temurin:21-jre-alpine
 
-RUN addgroup -S postventa && adduser -S postventa -G postventa
+# La imagen base se publica cada tanto y entre medio Alpine saca parches (p. ej. brotli-libs,
+# CVE-2026-111497). Se aplican al construir para que el escaneo de Trivy no dependa de cuando
+# se actualiza la base.
+RUN apk upgrade --no-cache \
+    && addgroup -S postventa && adduser -S postventa -G postventa
 
 WORKDIR /app
 COPY --from=build --chown=postventa:postventa /build/target/postventa-service-*.jar app.jar
